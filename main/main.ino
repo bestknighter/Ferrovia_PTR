@@ -9,14 +9,15 @@
 
 
 
-#define LED_PIN_GREEN 02
-#define LED_PIN_YELLW 03
-#define LED_PIN_RED_1 04
-#define LED_PIN_RED_2 05
+#define LED_PIN_GREEN 05
+#define LED_PIN_YELLW 04
+#define LED_PIN_RED_1 02
+#define LED_PIN_RED_2 03
 #define LED_PIN_CAR 06
 #define LED_PIN_PPL 07
 
 void LED_Controller( void* pvParameters );
+void semaphoreStateChanger( void* pvParameters );
 
 /* Demonstração dessa tabela. OBS.: PPL só tem Green, Red1 e Red2.
  *    CAR PPL Pin
@@ -42,6 +43,7 @@ void setup() {
   mtx_ledStatus = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   
   xTaskCreate( LED_Controller, "LED_Controller", 192 /* STACK SIZE */, NULL, 2, NULL );
+  xTaskCreate( semaphoreStateChanger, "semaphoreStateChanger", 192 /* STACK SIZE */, NULL, 2, NULL );
 
   #ifdef DEBUG
   Serial.begin( 9600 );
@@ -76,11 +78,11 @@ void LED_Controller(  void* pvParameters __attribute__((unused)) ) {
   xSemaphoreGive( mtx_ledStatus );
 
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = (1000/4) / portTICK_PERIOD_MS; // 4 Hz
+  const TickType_t xFrequency = (1000.0/62.0) / portTICK_PERIOD_MS; // 62 Hz (acima disso acontece um comportamento bizarro)
   
-  #ifdef DEBUG
+  #ifdef DEBUG_STACK
   bool highWaterMarked = false;
-  #endif // DEBUG
+  #endif // DEBUG_STACK
 
   /* LOOP */
   while(true) {
@@ -93,17 +95,60 @@ void LED_Controller(  void* pvParameters __attribute__((unused)) ) {
       digitalWrite( LED_PIN_PPL, ledStatus[1][currentRow] == 1 ? LOW : HIGH );
       xSemaphoreGive( mtx_ledStatus );
       
-      currentRow = currentRow+1 % 4;
+      currentRow = (currentRow+1) % 4;
     }
 
 
     // Para verificação do uso da stack
-    #ifdef DEBUG
+    #ifdef DEBUG_STACK
     if( !highWaterMarked ) {
-      Serial.print( uxTaskGetStackHighWaterMark(NULL) );
+      Serial.print( "LED_Controller high water mark: " + uxTaskGetStackHighWaterMark(NULL) );
       highWaterMarked = true;
     }
+    #endif // DEBUG_STACK
+    
+    vTaskDelayUntil( &xLastWakeTime, xFrequency );
+  }
+}
+
+void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
+  /* SETUP */
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = (1000/1) / portTICK_PERIOD_MS; // 1 Hz
+  byte currentLed = 0;
+  
+  #ifdef DEBUG_STACK
+  bool highWaterMarked = false;
+  #endif // DEBUG_STACK
+
+  /* LOOP */
+  while(true) {
+    while( xSemaphoreTake( mtx_ledStatus, portMAX_DELAY ) != pdTRUE ) {}
+    for( byte i = 0; i < 8; i++ ) {
+      if( currentLed == i ) *((byte*)ledStatus+i) = (byte)1;
+      else *((byte*)ledStatus+i) = (byte)0;
+    }
+    #ifdef DEBUG
+    int statusLeds = 0;
+    for( byte i = 7; i < 8; i-- ) {
+      statusLeds = statusLeds | (*((byte*)ledStatus+i) == (byte)0 ? 0x0 : 0x1);
+      statusLeds = statusLeds << 1;
+    }
+    Serial.write( "LED_Controller statusLeds: " );
+    Serial.print( statusLeds, BIN );
+    Serial.write( "\n" );
     #endif // DEBUG
+    xSemaphoreGive( mtx_ledStatus );
+    currentLed = (currentLed+1) % 8;
+
+
+    // Para verificação do uso da stack
+    #ifdef DEBUG_STACK
+    if( !highWaterMarked ) {
+      Serial.print( "semaphoreStateChanger high water mark: " + uxTaskGetStackHighWaterMark(NULL) );
+      highWaterMarked = true;
+    }
+    #endif // DEBUG_STACK
     
     vTaskDelayUntil( &xLastWakeTime, xFrequency );
   }
