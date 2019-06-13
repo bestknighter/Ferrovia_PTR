@@ -89,8 +89,8 @@ void LED_Controller(  void* pvParameters __attribute__((unused)) ) {
         if( i == currentRow ) digitalWrite( ledStatus[2][i], HIGH );
         else digitalWrite( ledStatus[2][i], LOW );
       }
-      digitalWrite( LED_PIN_CAR, ledStatus[0][currentRow] == 1 ? HIGH : LOW );
-      digitalWrite( LED_PIN_PPL, ledStatus[1][currentRow] == 1 ? HIGH : LOW );
+      digitalWrite( LED_PIN_CAR, ledStatus[0][currentRow] == 1 ? LOW : HIGH );
+      digitalWrite( LED_PIN_PPL, ledStatus[1][currentRow] == 1 ? LOW : HIGH );
       xSemaphoreGive( mtx_ledStatus );
       
       currentRow = currentRow+1 % 4;
