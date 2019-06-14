@@ -35,7 +35,8 @@ SemaphoreHandle_t mtx_ledStatus;
 void LED_Controller( void* pvParameters );
 
 enum lightStates {
-  GO = 0,
+  OFF = 0,
+  GO,
   ATTENTION,
   STOP,
   E_STOP,
@@ -132,18 +133,30 @@ void LED_Controller(  void* pvParameters __attribute__((unused)) ) {
 void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
   /* SETUP */
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = (1000/2) / portTICK_PERIOD_MS; // 2 Hz
+  const TickType_t xFrequency = (1000/4) / portTICK_PERIOD_MS; // 4 Hz
   
   #ifdef DEBUG_STACK
   bool highWaterMarked = false;
   #endif // DEBUG_STACK
 
   /* LOOP */
+  short showingCar = 0;
+  short showingPpl = 0;
   while(true) {
     if( xSemaphoreTake( mtx_lightState, 20 ) == pdTRUE ) {
       int currentLightState = lightState[CAR];
       xSemaphoreGive( mtx_lightState );
       switch( currentLightState ) {
+        case OFF:
+          if( xSemaphoreTake( mtx_ledStatus, 20 ) == pdTRUE ) {
+            ledStatus[CAR][GREEN] = 0;
+            ledStatus[CAR][YELLW] = 0;
+            ledStatus[CAR][RED_1] = 0;
+            ledStatus[CAR][RED_2] = 0;
+            xSemaphoreGive( mtx_ledStatus );
+            showingCar = 0;
+          }
+          break;
         case GO:
           if( xSemaphoreTake( mtx_ledStatus, 20 ) == pdTRUE ) {
             ledStatus[CAR][GREEN] = 1;
@@ -151,6 +164,7 @@ void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
             ledStatus[CAR][RED_1] = 0;
             ledStatus[CAR][RED_2] = 0;
             xSemaphoreGive( mtx_ledStatus );
+            showingCar = 0;
           }
           break;
         case ATTENTION:
@@ -160,6 +174,7 @@ void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
             ledStatus[CAR][RED_1] = 0;
             ledStatus[CAR][RED_2] = 0;
             xSemaphoreGive( mtx_ledStatus );
+            showingCar = 0;
           }
           break;
         case STOP:
@@ -169,15 +184,17 @@ void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
             ledStatus[CAR][RED_1] = 1;
             ledStatus[CAR][RED_2] = 1;
             xSemaphoreGive( mtx_ledStatus );
+            showingCar = 0;
           }
           break;
         case E_STOP:
           if( xSemaphoreTake( mtx_ledStatus, 20 ) == pdTRUE ) {
             ledStatus[CAR][GREEN] = 0;
             ledStatus[CAR][YELLW] = 0;
-            ledStatus[CAR][RED_1] = 1; // Blinking
-            ledStatus[CAR][RED_2] = 0; // BLinking
+            ledStatus[CAR][RED_1] = showingCar <  1 ? 1 : 0; // Blinking
+            ledStatus[CAR][RED_2] = showingCar >= 1 ? 1 : 0; // BLinking
             xSemaphoreGive( mtx_ledStatus );
+            showingCar = (showingCar+1) % 2;
           }
           break;
         case ERR:
@@ -187,6 +204,7 @@ void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
             ledStatus[CAR][RED_1] = 1;
             ledStatus[CAR][RED_2] = 1;
             xSemaphoreGive( mtx_ledStatus );
+            showingCar = 0;
           }
           break;
       }
@@ -196,20 +214,31 @@ void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
       int currentLightState = lightState[PPL];
       xSemaphoreGive( mtx_lightState );
       switch( currentLightState ) {
+        case OFF:
+          if( xSemaphoreTake( mtx_ledStatus, 20 ) == pdTRUE ) {
+            ledStatus[PPL][GREEN] = 0;
+            ledStatus[PPL][RED_1] = 0;
+            ledStatus[PPL][RED_2] = 0;
+            xSemaphoreGive( mtx_ledStatus );
+            showingPpl = 0;
+          }
+          break;
         case GO:
           if( xSemaphoreTake( mtx_ledStatus, 20 ) == pdTRUE ) {
             ledStatus[PPL][GREEN] = 1;
             ledStatus[PPL][RED_1] = 0;
             ledStatus[PPL][RED_2] = 0;
             xSemaphoreGive( mtx_ledStatus );
+            showingPpl = 0;
           }
           break;
         case ATTENTION:
           if( xSemaphoreTake( mtx_ledStatus, 20 ) == pdTRUE ) {
             ledStatus[PPL][GREEN] = 0;
-            ledStatus[PPL][RED_1] = 1; // Blinking
-            ledStatus[PPL][RED_2] = 1; // Blinking
+            ledStatus[PPL][RED_1] = showingPpl < 2 ? 1 : 0; // Blinking
+            ledStatus[PPL][RED_2] = showingPpl < 2 ? 1 : 0; // Blinking
             xSemaphoreGive( mtx_ledStatus );
+            showingPpl = (showingPpl+1) % 4;
           }
           break;
         case STOP:
@@ -218,14 +247,16 @@ void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
             ledStatus[PPL][RED_1] = 1;
             ledStatus[PPL][RED_2] = 1;
             xSemaphoreGive( mtx_ledStatus );
+            showingPpl = 0;
           }
           break;
         case E_STOP:
           if( xSemaphoreTake( mtx_ledStatus, 20 ) == pdTRUE ) {
             ledStatus[PPL][GREEN] = 0;
-            ledStatus[PPL][RED_1] = 1; // Blinking
-            ledStatus[PPL][RED_2] = 0; // Blinking
+            ledStatus[PPL][RED_1] = showingPpl <  1 ? 1 : 0; // Blinking
+            ledStatus[PPL][RED_2] = showingPpl >= 1 ? 1 : 0; // Blinking
             xSemaphoreGive( mtx_ledStatus );
+            showingPpl = (showingPpl+1) % 2;
           }
           break;
         case ERR:
@@ -234,6 +265,7 @@ void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
             ledStatus[PPL][RED_1] = 1;
             ledStatus[PPL][RED_2] = 1;
             xSemaphoreGive( mtx_ledStatus );
+            showingPpl = 0;
           }
           break;
       }
@@ -262,17 +294,13 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
   #endif // DEBUG_STACK
 
   while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
-  lightState[CAR] = GO;
-  lightState[PPL] = GO;
+  lightState[CAR] = OFF;
+  lightState[PPL] = OFF;
   xSemaphoreGive( mtx_lightState );
 
   /* LOOP */
   while(true){
-    #ifdef DEBUG
-    Serial.println( lightState[CAR] );
-    Serial.println( lightState[PPL] );
-    Serial.println( "---" );
-    #endif // DEBUG
+    
     if( xSemaphoreTake( mtx_lightState, 20 ) == pdTRUE ) {
       lightState[CAR] = (lightState[CAR]+1) % (ERR+1);
       lightState[PPL] = (lightState[PPL]+1) % (ERR+1);
