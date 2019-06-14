@@ -2,12 +2,11 @@
 
 #include <task.h>
 #include <semphr.h>
+#include <event_groups.h>
 
 //#define DEBUG
 
-
-
-
+#define E_CHANGESTATE 0x1
 
 #define LED_PIN_GREEN 05
 #define LED_PIN_YELLW 04
@@ -46,6 +45,15 @@ int lightState[2];
 SemaphoreHandle_t mtx_lightState;
 void semaphoreStateChanger( void* pvParameters );
 
+enum semaphoreStates {
+  CARS_GO = 0,
+  PEDESTRIANS_GO,
+  EMERGENCY_GO,
+  TRAIN_GO
+};
+short semaphoreDesiredState;
+SemaphoreHandle_t mtx_semaphoreDesiredState;
+EventGroupHandle_t eventsGroup;
 void semaphoreController( void* pvParameters );
 
 
@@ -58,6 +66,8 @@ void setup() {
   ledStatus[PIN][RED_2] = LED_PIN_RED_2;
   mtx_ledStatus = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   mtx_lightState = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
+  mtx_stateVariables = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
+  eventsGroup = xEventGroupCreate(); // TODO: Tem que checar se não retornou null...
   
   xTaskCreate( LED_Controller, "LED_Controller", 192 /* STACK SIZE */, NULL, 2, NULL );
   xTaskCreate( semaphoreStateChanger, "semaphoreStateChanger", 192 /* STACK SIZE */, NULL, 2, NULL );
@@ -286,8 +296,6 @@ void semaphoreStateChanger( void* pvParameters __attribute__((unused)) ) {
 
 void semaphoreController( void* pvParameters __attribute__((unused)) ) {
   /* SETUP */
-  TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = (1000/0.25) / portTICK_PERIOD_MS; // 0.25 Hz
   
   #ifdef DEBUG_STACK
   bool highWaterMarked = false;
@@ -297,14 +305,125 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
   lightState[CAR] = OFF;
   lightState[PPL] = OFF;
   xSemaphoreGive( mtx_lightState );
+  short currentState = OFF;
+  short desiredState;
 
   /* LOOP */
+  TickType_t startingTime;
   while(true){
+    if( xSemaphoreTake( mtx_semaphoreDesiredState, 20 ) == pdTRUE ) {
+      desiredState = semaphoreDesiredState;
+      xSemaphoreGive( mtx_semaphoreDesiredState );
+      xEventGroupClearBits( eventsGroup, E_CHANGESTATE );
+      if( currentState != desiredState ) {
+        switch( desiredState ) {
+          case CARS_GO:
+            if( currentState == PEDESTRIANS_GO ) {
+              while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+              lightState[CAR] = STOP;
+              lightState[PPL] = ATTENTION;
+              xSemaphoreGive( mtx_lightState );
+              startingTime = xTaskGetTickCount();
+              vTaskDelayUntil( &startingTime, 5000 / portTICK_PERIOD_MS ); // 5s de delay
+            }
+
+            if( currentState != EMERGENCY_GO ) {
+              while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+              lightState[CAR] = STOP;
+              lightState[PPL] = STOP;
+              xSemaphoreGive( mtx_lightState );
+              startingTime = xTaskGetTickCount();
+              vTaskDelayUntil( &startingTime, 1000 / portTICK_PERIOD_MS ); // 1s de delay
+            }
+            
+            while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+            lightState[CAR] = GO;
+            lightState[PPL] = STOP;
+            xSemaphoreGive( mtx_lightState );
+            currentState = CARS_GO;
+            break;
+          case PEDESTRIANS_GO:
+            if( currentState == CARS_GO || currentState == EMERGENCY_GO) {
+              while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+              lightState[CAR] = ATTENTION;
+              lightState[PPL] = STOP;
+              xSemaphoreGive( mtx_lightState );
+              startingTime = xTaskGetTickCount();
+              vTaskDelayUntil( &startingTime, 3000 / portTICK_PERIOD_MS ); // 3s de delay
+            }
+            
+            while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+            lightState[CAR] = STOP;
+            lightState[PPL] = STOP;
+            xSemaphoreGive( mtx_lightState );
+            startingTime = xTaskGetTickCount();
+            vTaskDelayUntil( &startingTime, 1000 / portTICK_PERIOD_MS ); // 1s de delay
+            
+            while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+            lightState[CAR] = STOP;
+            lightState[PPL] = GO;
+            xSemaphoreGive( mtx_lightState );
+            currentState = PEDESTRIANS_GO;
+            break;
+          case EMERGENCY_GO:
+            if( currentState == PEDESTRIANS_GO ) {
+              while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+              lightState[CAR] = STOP;
+              lightState[PPL] = ATTENTION;
+              xSemaphoreGive( mtx_lightState );
+              startingTime = xTaskGetTickCount();
+              vTaskDelayUntil( &startingTime, 4000 / portTICK_PERIOD_MS ); // 4s de delay
+            }
+
+            if( currentState != CARS_GO ) {
+              while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+              lightState[CAR] = STOP;
+              lightState[PPL] = E_STOP;
+              xSemaphoreGive( mtx_lightState );
+              startingTime = xTaskGetTickCount();
+              vTaskDelayUntil( &startingTime, 500 / portTICK_PERIOD_MS ); // 0.5s de delay
+            }
+            
+            while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+            lightState[CAR] = GO;
+            lightState[PPL] = E_STOP;
+            xSemaphoreGive( mtx_lightState );
+            currentState = EMERGENCY_GO;
+            break;
+          case TRAIN_GO:
+            if( currentState == PEDESTRIANS_GO ) {
+              while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+              lightState[CAR] = E_STOP;
+              lightState[PPL] = ATTENTION;
+              xSemaphoreGive( mtx_lightState );
+              startingTime = xTaskGetTickCount();
+              vTaskDelayUntil( &startingTime, 4000 / portTICK_PERIOD_MS ); // 4s de delay
+            } else if( currentState == CARS_GO || currentState == EMERGENCY_GO ) {
+              while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+              lightState[CAR] = ATTENTION;
+              lightState[PPL] = E_STOP;
+              xSemaphoreGive( mtx_lightState );
+              startingTime = xTaskGetTickCount();
+              vTaskDelayUntil( &startingTime, 4000 / portTICK_PERIOD_MS ); // 4s de delay
+            }
+            
+            while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+            lightState[CAR] = E_STOP;
+            lightState[PPL] = E_STOP;
+            xSemaphoreGive( mtx_lightState );
+            currentState = TRAIN_GO;
+            break;
+          default:
+            while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
+            lightState[CAR] = ERR;
+            lightState[PPL] = ERR;
+            xSemaphoreGive( mtx_lightState );
+            currentState = ERR;
+            break;
+        }
+      }
+    }
     
-    if( xSemaphoreTake( mtx_lightState, 20 ) == pdTRUE ) {
-      lightState[CAR] = (lightState[CAR]+1) % (ERR+1);
-      lightState[PPL] = (lightState[PPL]+1) % (ERR+1);
-      xSemaphoreGive( mtx_lightState );  
     }
     
     // Para verificação do uso da stack
