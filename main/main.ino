@@ -22,6 +22,12 @@
 #define RED_1 2
 #define RED_2 3
 
+#define CAR_FLOW_S_PIN 00
+#define CRSWLK_BTN_PIN 00
+#define TRNINC_BTN_PIN 00
+#define TRNLFT_BTN_PIN 00
+#define EMGINC_SNS_PIN 00
+
 /* Demonstração dessa tabela. OBS.: PPL só tem Green, Red1 e Red2.
  *    CAR PPL Pin
  * G  1   0   02
@@ -56,7 +62,11 @@ SemaphoreHandle_t mtx_semaphoreDesiredState;
 EventGroupHandle_t eventsGroup;
 void semaphoreController( void* pvParameters );
 
-
+float trafficWeight;
+unsigned long wantToCross_time;
+bool wantToCross, emergencyVehicleIncoming, trainIncoming;
+SemaphoreHandle_t mtx_stateVariables;
+void sensorMonitor( void* pvParameters );
 
 // Criação das tasks e a colocando no scheduler do FreeRTOS
 void setup() {
@@ -72,6 +82,7 @@ void setup() {
   xTaskCreate( LED_Controller, "LED_Controller", 192 /* STACK SIZE */, NULL, 2, NULL );
   xTaskCreate( semaphoreStateChanger, "semaphoreStateChanger", 192 /* STACK SIZE */, NULL, 2, NULL );
   xTaskCreate( semaphoreController, "semaphoreController", 192 /* STACK SIZE */, NULL, 2, NULL );
+  xTaskCreate( sensorMonitor, "sensorMonitor", 192 /* STACK SIZE */, NULL, 2, NULL );
 
   #ifdef DEBUG
   Serial.begin( 9600 );
@@ -80,13 +91,6 @@ void setup() {
 
 // Vazio. Como usamos FreeRTOS, tudo é feito por tasks.
 void loop() {}
-
-
-
-
-
-
-
 
 /**
  * @brief Controla quais leds vão ficar acesos e por quanto tempo
@@ -424,12 +428,34 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
       }
     }
     
+    // Para verificação do uso da stack
+    #ifdef DEBUG_STACK
+    if( !highWaterMarked ) {
+      Serial.print( "semaphoreController high water mark: " + uxTaskGetStackHighWaterMark(NULL) );
+      highWaterMarked = true;
     }
+    #endif // DEBUG_STACK
+    
+    xEventGroupWaitBits( eventsGroup, E_CHANGESTATE, pdFALSE, pdFALSE, portMAX_DELAY );
+  }
+}
+
+void sensorMonitor( void* pvParameters __attribute__((unused)) ) {
+  /* SETUP */
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = (1000/10) / portTICK_PERIOD_MS; // 10 Hz
+  
+  #ifdef DEBUG_STACK
+  bool highWaterMarked = false;
+  #endif // DEBUG_STACK
+
+  /* LOOP */
+  while(true){
     
     // Para verificação do uso da stack
     #ifdef DEBUG_STACK
     if( !highWaterMarked ) {
-      Serial.print( "semaphoreStateChanger high water mark: " + uxTaskGetStackHighWaterMark(NULL) );
+      Serial.print( "sensorMonitor high water mark: " + uxTaskGetStackHighWaterMark(NULL) );
       highWaterMarked = true;
     }
     #endif // DEBUG_STACK
