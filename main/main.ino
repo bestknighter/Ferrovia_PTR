@@ -7,6 +7,9 @@
 //#define DEBUG_STACK
 
 #define E_CHANGESTATE 0x1
+#define MIN_PPL_WAITTIME 2000 // 2s
+#define MAX_PPL_WAITTIME 60000 // 60s
+#define PPL_CROSS_TIME 10000 // 10s
 
 #define LED_PIN_GREEN 05
 #define LED_PIN_YELLW 04
@@ -22,11 +25,10 @@
 #define RED_1 2
 #define RED_2 3
 
-#define CAR_FLOW_S_PIN 00
-#define CRSWLK_BTN_PIN 00
-#define TRNINC_BTN_PIN 00
-#define TRNLFT_BTN_PIN 00
-#define EMGINC_SNS_PIN 00
+#define CAR_FLOW_S_PIN A15
+#define CRSWLK_BTN_PIN 22
+#define TRNINC_SNS_PIN 24
+#define EMGINC_SNS_PIN 25
 
 /* Demonstração dessa tabela. OBS.: PPL só tem Green, Red1 e Red2.
  *    CAR PPL Pin
@@ -59,7 +61,8 @@ enum semaphoreStates {
   TRAIN_GO
 };
 short semaphoreDesiredState;
-SemaphoreHandle_t mtx_semaphoreDesiredState;
+short semaphoreCurrentState;
+SemaphoreHandle_t mtx_semaphoreStates;
 EventGroupHandle_t eventsGroup;
 void semaphoreController( void* pvParameters );
 
@@ -68,6 +71,10 @@ unsigned long wantToCross_time;
 bool wantToCross, emergencyVehicleIncoming, trainIncoming;
 SemaphoreHandle_t mtx_stateVariables;
 void sensorMonitor( void* pvParameters );
+
+unsigned long pplOpen_time = 0;
+SemaphoreHandle_t mtx_brainVariables;
+void brain( void* pvParameters );
 
 void tester( void* pvParameters );
 
@@ -82,14 +89,19 @@ void setup() {
   mtx_ledStatus = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   mtx_lightState = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   mtx_stateVariables = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
-  mtx_semaphoreDesiredState = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
+  mtx_semaphoreStates = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
+  mtx_brainVariables = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   eventsGroup = xEventGroupCreate(); // TODO: Tem que checar se não retornou null...
+
+  semaphoreDesiredState = TURNED_OFF;
   
   xTaskCreate( LED_Controller, "LED_Controller", 192 /* STACK SIZE */, NULL, 2, NULL );
   xTaskCreate( semaphoreStateChanger, "semaphoreStateChanger", 192 /* STACK SIZE */, NULL, 2, NULL );
   xTaskCreate( semaphoreController, "semaphoreController", 192 /* STACK SIZE */, NULL, 2, NULL );
-  //xTaskCreate( sensorMonitor, "sensorMonitor", 192 /* STACK SIZE */, NULL, 2, NULL );
-  xTaskCreate( tester, "tester", 192 /* STACK SIZE */, NULL, 2, NULL );
+  xTaskCreate( sensorMonitor, "sensorMonitor", 192 /* STACK SIZE */, NULL, 2, NULL );
+  xTaskCreate( brain, "brain", 192 /* STACK SIZE */, NULL, 2, NULL );
+//  xTaskCreate( tester, "tester", 192 /* STACK SIZE */, NULL, 2, NULL );
+
 }
 
 // Vazio. Como usamos FreeRTOS, tudo é feito por tasks.
@@ -308,10 +320,6 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
   bool highWaterMarked = false;
   #endif // DEBUG_STACK
 
-  while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
-  lightState[CAR] = OFF;
-  lightState[PPL] = OFF;
-  xSemaphoreGive( mtx_lightState );
   short currentState = TURNED_OFF;
   short desiredState;
 
@@ -320,9 +328,9 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
   while(true){
     xEventGroupWaitBits( eventsGroup, E_CHANGESTATE, pdFALSE, pdFALSE, portMAX_DELAY );
     
-    while( xSemaphoreTake( mtx_semaphoreDesiredState, portMAX_DELAY ) != pdTRUE ) {}
+    while( xSemaphoreTake( mtx_semaphoreStates, portMAX_DELAY ) != pdTRUE ) {}
     desiredState = semaphoreDesiredState;
-    xSemaphoreGive( mtx_semaphoreDesiredState );
+    xSemaphoreGive( mtx_semaphoreStates );
     xEventGroupClearBits( eventsGroup, E_CHANGESTATE );
     
     if( currentState != desiredState ) {
@@ -360,7 +368,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
             lightState[PPL] = STOP;
             xSemaphoreGive( mtx_lightState );
             startingTime = xTaskGetTickCount();
-            vTaskDelayUntil( &startingTime, 5000 / portTICK_PERIOD_MS ); // 5s de delay
+            vTaskDelayUntil( &startingTime, 3000 / portTICK_PERIOD_MS ); // 3s de delay
           }
           
           while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
@@ -375,6 +383,9 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[PPL] = GO;
           xSemaphoreGive( mtx_lightState );
           currentState = PEDESTRIANS_GO;
+          while( xSemaphoreTake( mtx_brainVariables, portMAX_DELAY ) != pdTRUE ) {}
+          pplOpen_time = millis();
+          xSemaphoreGive( mtx_brainVariables );
           break;
         case EMERGENCY_GO:
           if( currentState == PEDESTRIANS_GO ) {
@@ -416,7 +427,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
             lightState[PPL] = E_STOP;
             xSemaphoreGive( mtx_lightState );
             startingTime = xTaskGetTickCount();
-            vTaskDelayUntil( &startingTime, 5000 / portTICK_PERIOD_MS ); // 5s de delay
+            vTaskDelayUntil( &startingTime, 3000 / portTICK_PERIOD_MS ); // 3s de delay
           }
           
           while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
@@ -440,6 +451,9 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           currentState = ERR;
           break;
       }
+      while( xSemaphoreTake( mtx_semaphoreStates, portMAX_DELAY) != pdTRUE ) {}
+      semaphoreCurrentState = currentState;
+      xSemaphoreGive( mtx_semaphoreStates );
     }
     
     // Para verificação do uso da stack
@@ -455,7 +469,12 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
 void sensorMonitor( void* pvParameters __attribute__((unused)) ) {
   /* SETUP */
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = (1000/10) / portTICK_PERIOD_MS; // 10 Hz
+  const TickType_t xFrequency = (1000/30) / portTICK_PERIOD_MS; // 10 Hz
+
+  pinMode( CRSWLK_BTN_PIN, INPUT_PULLUP );
+  pinMode( EMGINC_SNS_PIN, INPUT_PULLUP );
+  pinMode( TRNINC_SNS_PIN, INPUT_PULLUP );
+  pinMode( CAR_FLOW_S_PIN, INPUT );
   
   #ifdef DEBUG_STACK
   bool highWaterMarked = false;
@@ -463,6 +482,82 @@ void sensorMonitor( void* pvParameters __attribute__((unused)) ) {
 
   /* LOOP */
   while(true){
+    
+    while( xSemaphoreTake( mtx_stateVariables, portMAX_DELAY) != pdTRUE ) {}
+    if( !wantToCross && !digitalRead( CRSWLK_BTN_PIN ) ){ // Pinagem tem logica invertida: LOW == botao pressionado
+      wantToCross = true;
+      wantToCross_time = millis();
+    }
+    trafficWeight = analogRead( CAR_FLOW_S_PIN )/1023.0;
+    emergencyVehicleIncoming = !digitalRead( EMGINC_SNS_PIN );
+    trainIncoming = !digitalRead( TRNINC_SNS_PIN );
+    xSemaphoreGive( mtx_stateVariables );
+    
+    // Para verificação do uso da stack
+    #ifdef DEBUG_STACK
+    if( !highWaterMarked ) {
+      Serial.print( "sensorMonitor high water mark: " + uxTaskGetStackHighWaterMark(NULL) );
+      highWaterMarked = true;
+    }
+    #endif // DEBUG_STACK
+    
+    vTaskDelayUntil( &xLastWakeTime, xFrequency );
+  }
+}
+
+void brain( void* pvParameters __attribute__((unused)) ) {
+  /* SETUP */
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = (1000/10) / portTICK_PERIOD_MS; // 10 Hz
+
+  while( xSemaphoreTake( mtx_semaphoreStates, portMAX_DELAY) != pdTRUE ) {}
+  semaphoreDesiredState = CARS_GO;
+  xSemaphoreGive( mtx_semaphoreStates );
+  xEventGroupSetBits( eventsGroup, E_CHANGESTATE );
+
+  #ifdef DEBUG_STACK
+  bool highWaterMarked = false;
+  #endif // DEBUG_STACK
+
+  /* LOOP */
+  unsigned long whenPplFirstOpen_time = 0;
+  unsigned long whenPplLastOpen_time = 0;
+  while(true){
+
+    while( xSemaphoreTake( mtx_brainVariables, portMAX_DELAY ) != pdTRUE ) {}
+    whenPplFirstOpen_time = pplOpen_time;
+    xSemaphoreGive( mtx_brainVariables );
+    
+    if( xSemaphoreTake( mtx_stateVariables, portMAX_DELAY) == pdTRUE ) {
+      if( xSemaphoreTake( mtx_semaphoreStates, portMAX_DELAY) == pdTRUE ) {
+
+        if( PEDESTRIANS_GO == semaphoreCurrentState ) {
+          whenPplLastOpen_time = millis();
+        }
+        
+        if( trainIncoming ) {
+          semaphoreDesiredState = TRAIN_GO;
+        } else if( emergencyVehicleIncoming ) {
+          semaphoreDesiredState = EMERGENCY_GO;
+        } else if( wantToCross ) {
+          if( PEDESTRIANS_GO != semaphoreCurrentState && whenPplLastOpen_time + MIN_PPL_WAITTIME + trafficWeight * (MAX_PPL_WAITTIME - MIN_PPL_WAITTIME) < millis() ) {
+            semaphoreDesiredState = PEDESTRIANS_GO;
+            wantToCross = false;
+          } else if( PEDESTRIANS_GO == semaphoreCurrentState ) {
+            wantToCross = false;
+          }
+        } else if( PEDESTRIANS_GO == semaphoreCurrentState && whenPplFirstOpen_time + PPL_CROSS_TIME > millis() ) {
+          semaphoreDesiredState = PEDESTRIANS_GO;
+        } else {
+          semaphoreDesiredState = CARS_GO;
+        }
+
+        if( semaphoreCurrentState != semaphoreDesiredState ) xEventGroupSetBits( eventsGroup, E_CHANGESTATE );
+        xSemaphoreGive( mtx_semaphoreStates );
+      }
+      xSemaphoreGive( mtx_stateVariables );
+    }
+    
     
     // Para verificação do uso da stack
     #ifdef DEBUG_STACK
@@ -481,9 +576,9 @@ void tester( void* pvParameters __attribute__((unused)) ) {
   while(true) {
     int mode = Serial.read() - '0';
     if( mode >= -1 ){
-      while( xSemaphoreTake( mtx_semaphoreDesiredState, portMAX_DELAY) != pdTRUE ) {}
+      while( xSemaphoreTake( mtx_semaphoreStates, portMAX_DELAY) != pdTRUE ) {}
       semaphoreDesiredState = mode;
-      xSemaphoreGive( mtx_semaphoreDesiredState );
+      xSemaphoreGive( mtx_semaphoreStates );
       xEventGroupSetBits( eventsGroup, E_CHANGESTATE );
     }
     vTaskDelayUntil( &lastAwakeTime, 500 / portTICK_PERIOD_MS ); // 0.5s de delay
