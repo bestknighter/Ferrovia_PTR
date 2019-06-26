@@ -68,12 +68,24 @@ void brain( void* pvParameters );
 
 void tester( void* pvParameters );
 
+void openGate() {
+  for( int i = TRN_GTE_CLSE_ANG; i <= TRN_GTE_OPEN_ANG; i++ ){
+    servo.write(i);
+    delay(50);
+  }
+}
+
+void closeGate() {
+  for( int i = TRN_GTE_OPEN_ANG; i >= TRN_GTE_CLSE_ANG; i-- ){
+    servo.write(i);
+    delay(50);
+  }
+}
+
 // Criação das tasks e a colocando no scheduler do FreeRTOS
 void setup() {
   Serial.begin( 9600 );
   servo.attach( TRAIN_GATE_PIN );
-  servo.write( TRN_GTE_CLSE_ANG );
-  delay(1000);
   servo.write( TRN_GTE_OPEN_ANG );
   
   ledStatus[PIN][GREEN] = LED_GREEN_PIN;
@@ -331,8 +343,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
       switch( desiredState ) {
         case CARS_GO:
           if( currentState == TRAIN_GO ) {
-            servo.write( TRN_GTE_OPEN_ANG );
-            vTaskDelayUntil( &startingTime, 1000 / portTICK_PERIOD_MS ); // 1s de delay
+            openGate();
           }
           if( currentState == PEDESTRIANS_GO ) {
             while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
@@ -362,8 +373,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           break;
         case PEDESTRIANS_GO:
           if( currentState == TRAIN_GO ) {
-            servo.write( TRN_GTE_OPEN_ANG );
-            vTaskDelayUntil( &startingTime, 1000 / portTICK_PERIOD_MS ); // 1s de delay
+            openGate();
           }
           if( currentState == CARS_GO || currentState == EMERGENCY_GO) {
             while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
@@ -390,8 +400,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           break;
         case EMERGENCY_GO:
           if( currentState == TRAIN_GO ) {
-            servo.write( TRN_GTE_OPEN_ANG );
-            vTaskDelayUntil( &startingTime, 1000 / portTICK_PERIOD_MS ); // 1s de delay
+            openGate();
           }
           if( currentState == PEDESTRIANS_GO ) {
             while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
@@ -435,30 +444,29 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
             startingTime = xTaskGetTickCount();
             vTaskDelayUntil( &startingTime, 3000 / portTICK_PERIOD_MS ); // 3s de delay
           }
-          servo.write( TRN_GTE_CLSE_ANG );
           while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
           lightState[CAR] = E_STOP;
           lightState[PPL] = E_STOP;
           xSemaphoreGive( mtx_lightState );
-          vTaskDelayUntil( &startingTime, 1000 / portTICK_PERIOD_MS ); // 1s de delay
+          closeGate();
           previousState = currentState;
           currentState = TRAIN_GO;
           break;
         case TURNED_OFF:
-          servo.write( TRN_GTE_OPEN_ANG );
           while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
           lightState[CAR] = OFF;
           lightState[PPL] = OFF;
           xSemaphoreGive( mtx_lightState );
+          openGate();
           previousState = currentState;
           currentState = TURNED_OFF;
           break;
         default:
-          servo.write( TRN_GTE_OPEN_ANG );
           while( xSemaphoreTake( mtx_lightState, portMAX_DELAY ) != pdTRUE ) {}
           lightState[CAR] = ERR;
           lightState[PPL] = ERR;
           xSemaphoreGive( mtx_lightState );
+          openGate();
           previousState = currentState;
           currentState = ERR;
           break;
