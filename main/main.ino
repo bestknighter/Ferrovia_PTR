@@ -10,6 +10,8 @@
 
 //#define DEBUG_STACK
 
+#define E_CHANGESTATE 0x1
+
 #define CAR 0
 #define PPL 1
 #define PIN 2
@@ -51,8 +53,8 @@ enum semaphoreStates {
   TRAIN_GO
 };
 short semaphoreDesiredState;
-short semaphoreCurrentState;
-short semaphorePreviousNormalState;
+short semaphoreCurrentState = TURNED_OFF;
+short semaphorePreviousNormalState = CARS_GO;
 SemaphoreHandle_t mtx_semaphoreStates;
 EventGroupHandle_t eventsGroup;
 void semaphoreController( void* pvParameters );
@@ -91,7 +93,7 @@ void setup() {
   xTaskCreate( semaphoreController, "semaphoreController", 192 /* STACK SIZE */, NULL, 2, NULL );
   xTaskCreate( sensorMonitor, "sensorMonitor", 192 /* STACK SIZE */, NULL, 2, NULL );
   xTaskCreate( brain, "brain", 192 /* STACK SIZE */, NULL, 2, NULL );
-//  xTaskCreate( tester, "tester", 192 /* STACK SIZE */, NULL, 2, NULL );
+  xTaskCreate( tester, "tester", 192 /* STACK SIZE */, NULL, 2, NULL );
 
 }
 
@@ -311,7 +313,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
   bool highWaterMarked = false;
   #endif // DEBUG_STACK
 
-  short previousNormalState = CARS_GO;
+  short previousState = CARS_GO;
   short currentState = TURNED_OFF;
   short desiredState;
 
@@ -355,7 +357,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[CAR] = GO;
           lightState[PPL] = STOP;
           xSemaphoreGive( mtx_lightState );
-          previousNormalState = currentState;
+          previousState = currentState;
           currentState = CARS_GO;
           break;
         case PEDESTRIANS_GO:
@@ -383,7 +385,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[CAR] = STOP;
           lightState[PPL] = GO;
           xSemaphoreGive( mtx_lightState );
-          previousNormalState = currentState;
+          previousState = currentState;
           currentState = PEDESTRIANS_GO;
           break;
         case EMERGENCY_GO:
@@ -413,6 +415,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[CAR] = GO;
           lightState[PPL] = E_STOP;
           xSemaphoreGive( mtx_lightState );
+          previousState = currentState;
           currentState = EMERGENCY_GO;
           break;
         case TRAIN_GO:
@@ -438,6 +441,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[PPL] = E_STOP;
           xSemaphoreGive( mtx_lightState );
           vTaskDelayUntil( &startingTime, 1000 / portTICK_PERIOD_MS ); // 1s de delay
+          previousState = currentState;
           currentState = TRAIN_GO;
           break;
         case TURNED_OFF:
@@ -446,6 +450,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[CAR] = OFF;
           lightState[PPL] = OFF;
           xSemaphoreGive( mtx_lightState );
+          previousState = currentState;
           currentState = TURNED_OFF;
           break;
         default:
@@ -454,12 +459,13 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[CAR] = ERR;
           lightState[PPL] = ERR;
           xSemaphoreGive( mtx_lightState );
+          previousState = currentState;
           currentState = ERR;
           break;
       }
       while( xSemaphoreTake( mtx_semaphoreStates, portMAX_DELAY) != pdTRUE ) {}
       semaphoreCurrentState = currentState;
-      semaphorePreviousNormalState = previousNormalState;
+      if( previousState == CARS_GO || previousState == PEDESTRIANS_GO ) semaphorePreviousNormalState = previousState;
       xSemaphoreGive( mtx_semaphoreStates );
     }
     
@@ -497,12 +503,13 @@ void sensorMonitor( void* pvParameters __attribute__((unused)) ) {
     trafficWeight = analogRead( CAR_FLOW_S_PIN )/1023.0;
     emergencyVehicleIncoming = digitalRead( EMGINC_SNS_PIN );
     trainIncoming = !digitalRead( TRNINC_SNS_PIN );
+//    Serial.print( "trainIncoming: " );
 //    Serial.print( trainIncoming );
-//    Serial.print( " " );
+//    Serial.print( " emergencyVehicleIncoming: " );
 //    Serial.print( emergencyVehicleIncoming );
-//    Serial.print( " " );
+//    Serial.print( " trafficWeight: " );
 //    Serial.print( trafficWeight );
-//    Serial.print( " " );
+//    Serial.print( " wantToCross: " );
 //    Serial.println( wantToCross );
     xSemaphoreGive( mtx_stateVariables );
 
@@ -548,9 +555,11 @@ void brain( void* pvParameters __attribute__((unused)) ) {
 
         if( PEDESTRIANS_GO == semaphoreCurrentState ) {
           timePplOpen += dt;
+          timeCarOpen = 0;
           wantToCross = false;
-        } else if ( CARS_GO == semaphoreCurrentState ) {
+        } else if ( CARS_GO == semaphoreCurrentState || EMERGENCY_GO == semaphoreCurrentState ) {
           timeCarOpen += dt;
+          timePplOpen = 0;
         }
         
         if( trainIncoming ) {
@@ -560,14 +569,18 @@ void brain( void* pvParameters __attribute__((unused)) ) {
         } else if( emergencyVehicleIncoming ) {
           semaphoreDesiredState = EMERGENCY_GO;
           timePplOpen = 0;
-          timeCarOpen = 0;
-        } else if( semaphoreCurrentState == TRAIN_GO || semaphoreCurrentState == EMERGENCY_GO ) {
+        } else if( semaphoreCurrentState == TRAIN_GO ) {
           semaphoreDesiredState = semaphorePreviousNormalState;
           timePplOpen = 0;
           timeCarOpen = 0;
+        } else if( semaphoreCurrentState == EMERGENCY_GO ) {
+          semaphoreDesiredState = semaphorePreviousNormalState;
+          timePplOpen = 0;
         } else if( wantToCross ) {
-          if( timeCarOpen > (1-trafficWeight)*MIN_PPL_WAITTIME + trafficWeight*MAX_PPL_WAITTIME ) semaphoreDesiredState = PEDESTRIANS_GO;
-        } else if( timePplOpen > PPL_CROSS_TIME ) {
+          if( timeCarOpen > (1-trafficWeight)*MIN_PPL_WAITTIME + trafficWeight*MAX_PPL_WAITTIME ) {
+            semaphoreDesiredState = PEDESTRIANS_GO;
+          }
+        } else if(  timePplOpen > PPL_CROSS_TIME ) {
           semaphoreDesiredState = CARS_GO;
         }
 
@@ -576,6 +589,10 @@ void brain( void* pvParameters __attribute__((unused)) ) {
       }
       xSemaphoreGive( mtx_stateVariables );
     }
+//    Serial.print( "timeCarOpen: " );
+//    Serial.print( timeCarOpen );
+//    Serial.print( " timePplOpen: " );
+//    Serial.println( timePplOpen );
     
     
     // Para verificação do uso da stack
