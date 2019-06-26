@@ -24,10 +24,10 @@ Servo servo;
 
 /* Demonstração dessa tabela. OBS.: PPL só tem Green, Red1 e Red2.
  *    CAR PPL Pin
- * G  1   0   02
- * Y  0   0   03
- * R1 0   1   04
- * R2 0   0   05
+ * G  1   0   LED_GREEN_PIN
+ * Y  0   0   LED_YELLW_PIN
+ * R1 0   1   LED_RED_1_PIN
+ * R2 0   0   LED_RED_2_PIN
  */
 byte ledStatus[3][4] = {0};
 SemaphoreHandle_t mtx_ledStatus;
@@ -41,7 +41,7 @@ enum lightStates {
   E_STOP,
   ERR
 };
-int lightState[2];
+short lightState[2];
 SemaphoreHandle_t mtx_lightState;
 void semaphoreStateChanger( void* pvParameters );
 
@@ -588,7 +588,7 @@ void brain( void* pvParameters __attribute__((unused)) ) {
           if( timeCarOpen > (1-trafficWeight)*MIN_PPL_WAITTIME + trafficWeight*MAX_PPL_WAITTIME ) {
             semaphoreDesiredState = PEDESTRIANS_GO;
           }
-        } else if(  timePplOpen > PPL_CROSS_TIME ) {
+        } else if( timePplOpen > PPL_CROSS_TIME ) {
           semaphoreDesiredState = CARS_GO;
         }
 
