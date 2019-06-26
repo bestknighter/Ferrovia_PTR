@@ -5,21 +5,11 @@
 #include <semphr.h>
 #include <event_groups.h>
 
+#include "pinagem.h"
+#include "constantes.h"
+
 //#define DEBUG_STACK
 
-#define E_CHANGESTATE 0x1
-#define MIN_PPL_WAITTIME 2000 // 2s
-#define MAX_PPL_WAITTIME 60000 // 60s
-#define PPL_CROSS_TIME 10000 // 10s
-#define TRN_GTE_OPEN_ANG 60
-#define TRN_GTE_CLSE_ANG 0
-
-#define LED_PIN_GREEN 45
-#define LED_PIN_YELLW 47
-#define LED_PIN_RED_1 48
-#define LED_PIN_RED_2 49
-#define LED_PIN_CAR 40
-#define LED_PIN_PPL 42
 #define CAR 0
 #define PPL 1
 #define PIN 2
@@ -27,12 +17,6 @@
 #define YELLW 1
 #define RED_1 2
 #define RED_2 3
-
-#define CAR_FLOW_S_PIN A15
-#define CRSWLK_BTN_PIN 39
-#define TRNINC_SNS_PIN 34
-#define TRAIN_GATE_PIN 26
-#define EMGINC_SNS_PIN 52
 
 Servo servo;
 
@@ -68,18 +52,16 @@ enum semaphoreStates {
 };
 short semaphoreDesiredState;
 short semaphoreCurrentState;
+short semaphorePreviousNormalState;
 SemaphoreHandle_t mtx_semaphoreStates;
 EventGroupHandle_t eventsGroup;
 void semaphoreController( void* pvParameters );
 
 float trafficWeight;
-unsigned long wantToCross_time;
 bool wantToCross, emergencyVehicleIncoming, trainIncoming;
 SemaphoreHandle_t mtx_stateVariables;
 void sensorMonitor( void* pvParameters );
 
-unsigned long pplOpen_time = 0;
-SemaphoreHandle_t mtx_brainVariables;
 void brain( void* pvParameters );
 
 void tester( void* pvParameters );
@@ -92,15 +74,14 @@ void setup() {
   delay(1000);
   servo.write( TRN_GTE_OPEN_ANG );
   
-  ledStatus[PIN][GREEN] = LED_PIN_GREEN;
-  ledStatus[PIN][YELLW] = LED_PIN_YELLW;
-  ledStatus[PIN][RED_1] = LED_PIN_RED_1;
-  ledStatus[PIN][RED_2] = LED_PIN_RED_2;
+  ledStatus[PIN][GREEN] = LED_GREEN_PIN;
+  ledStatus[PIN][YELLW] = LED_YELLW_PIN;
+  ledStatus[PIN][RED_1] = LED_RED_1_PIN;
+  ledStatus[PIN][RED_2] = LED_RED_2_PIN;
   mtx_ledStatus = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   mtx_lightState = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   mtx_stateVariables = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   mtx_semaphoreStates = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
-  mtx_brainVariables = xSemaphoreCreateMutex(); // TODO: Tem que checar se não retornou null...
   eventsGroup = xEventGroupCreate(); // TODO: Tem que checar se não retornou null...
 
   semaphoreDesiredState = TURNED_OFF;
@@ -130,8 +111,8 @@ void LED_Controller(  void* pvParameters __attribute__((unused)) ) {
   for( byte i = 0; i < 4; i++ ) {
     pinMode( ledStatus[PIN][i], OUTPUT );
   }
-  pinMode( LED_PIN_CAR, OUTPUT );
-  pinMode( LED_PIN_PPL, OUTPUT );
+  pinMode( LED_CAR_PIN, OUTPUT );
+  pinMode( LED_PPL_PIN, OUTPUT );
   xSemaphoreGive( mtx_ledStatus );
   
   #ifdef DEBUG_STACK
@@ -147,8 +128,8 @@ void LED_Controller(  void* pvParameters __attribute__((unused)) ) {
         if( i == currentRow ) digitalWrite( ledStatus[PIN][i], HIGH );
         else digitalWrite( ledStatus[PIN][i], LOW );
       }
-      digitalWrite( LED_PIN_CAR, ledStatus[CAR][currentRow] == 1 ? LOW : HIGH );
-      digitalWrite( LED_PIN_PPL, ledStatus[PPL][currentRow] == 1 ? LOW : HIGH );
+      digitalWrite( LED_CAR_PIN, ledStatus[CAR][currentRow] == 1 ? LOW : HIGH );
+      digitalWrite( LED_PPL_PIN, ledStatus[PPL][currentRow] == 1 ? LOW : HIGH );
       xSemaphoreGive( mtx_ledStatus );
       
       currentRow = (currentRow+1) % 4;
@@ -330,6 +311,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
   bool highWaterMarked = false;
   #endif // DEBUG_STACK
 
+  short previousNormalState = CARS_GO;
   short currentState = TURNED_OFF;
   short desiredState;
 
@@ -373,6 +355,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[CAR] = GO;
           lightState[PPL] = STOP;
           xSemaphoreGive( mtx_lightState );
+          previousNormalState = currentState;
           currentState = CARS_GO;
           break;
         case PEDESTRIANS_GO:
@@ -400,10 +383,8 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
           lightState[CAR] = STOP;
           lightState[PPL] = GO;
           xSemaphoreGive( mtx_lightState );
+          previousNormalState = currentState;
           currentState = PEDESTRIANS_GO;
-          while( xSemaphoreTake( mtx_brainVariables, portMAX_DELAY ) != pdTRUE ) {}
-          pplOpen_time = millis();
-          xSemaphoreGive( mtx_brainVariables );
           break;
         case EMERGENCY_GO:
           if( currentState == TRAIN_GO ) {
@@ -478,6 +459,7 @@ void semaphoreController( void* pvParameters __attribute__((unused)) ) {
       }
       while( xSemaphoreTake( mtx_semaphoreStates, portMAX_DELAY) != pdTRUE ) {}
       semaphoreCurrentState = currentState;
+      semaphorePreviousNormalState = previousNormalState;
       xSemaphoreGive( mtx_semaphoreStates );
     }
     
@@ -511,12 +493,17 @@ void sensorMonitor( void* pvParameters __attribute__((unused)) ) {
     while( xSemaphoreTake( mtx_stateVariables, portMAX_DELAY) != pdTRUE ) {}
     if( !wantToCross && !digitalRead( CRSWLK_BTN_PIN ) ){ // Pinagem tem logica invertida: LOW == botao pressionado
       wantToCross = true;
-      wantToCross_time = millis();
     }
     trafficWeight = analogRead( CAR_FLOW_S_PIN )/1023.0;
     emergencyVehicleIncoming = digitalRead( EMGINC_SNS_PIN );
     trainIncoming = !digitalRead( TRNINC_SNS_PIN );
-    Serial.println( emergencyVehicleIncoming );
+//    Serial.print( trainIncoming );
+//    Serial.print( " " );
+//    Serial.print( emergencyVehicleIncoming );
+//    Serial.print( " " );
+//    Serial.print( trafficWeight );
+//    Serial.print( " " );
+//    Serial.println( wantToCross );
     xSemaphoreGive( mtx_stateVariables );
 
     
@@ -547,35 +534,40 @@ void brain( void* pvParameters __attribute__((unused)) ) {
   #endif // DEBUG_STACK
 
   /* LOOP */
-  unsigned long whenPplFirstOpen_time = 0;
-  unsigned long whenPplLastOpen_time = 0;
+  unsigned long timePplOpen = 0;
+  unsigned long timeCarOpen = 0;
+  unsigned long frameStart;
+  unsigned long frameEnd = millis();
+  unsigned long dt = 0;
   while(true){
-
-    while( xSemaphoreTake( mtx_brainVariables, portMAX_DELAY ) != pdTRUE ) {}
-    whenPplFirstOpen_time = pplOpen_time;
-    xSemaphoreGive( mtx_brainVariables );
-    
+    frameStart = frameEnd;
+    frameEnd = millis();
+    dt = frameEnd - frameStart;
     if( xSemaphoreTake( mtx_stateVariables, portMAX_DELAY) == pdTRUE ) {
       if( xSemaphoreTake( mtx_semaphoreStates, portMAX_DELAY) == pdTRUE ) {
 
         if( PEDESTRIANS_GO == semaphoreCurrentState ) {
-          whenPplLastOpen_time = millis();
+          timePplOpen += dt;
+          wantToCross = false;
+        } else if ( CARS_GO == semaphoreCurrentState ) {
+          timeCarOpen += dt;
         }
         
         if( trainIncoming ) {
           semaphoreDesiredState = TRAIN_GO;
+          timePplOpen = 0;
+          timeCarOpen = 0;
         } else if( emergencyVehicleIncoming ) {
           semaphoreDesiredState = EMERGENCY_GO;
+          timePplOpen = 0;
+          timeCarOpen = 0;
+        } else if( semaphoreCurrentState == TRAIN_GO || semaphoreCurrentState == EMERGENCY_GO ) {
+          semaphoreDesiredState = semaphorePreviousNormalState;
+          timePplOpen = 0;
+          timeCarOpen = 0;
         } else if( wantToCross ) {
-          if( PEDESTRIANS_GO != semaphoreCurrentState && whenPplLastOpen_time + MIN_PPL_WAITTIME + trafficWeight * (MAX_PPL_WAITTIME - MIN_PPL_WAITTIME) < millis() ) {
-            semaphoreDesiredState = PEDESTRIANS_GO;
-            wantToCross = false;
-          } else if( PEDESTRIANS_GO == semaphoreCurrentState ) {
-            wantToCross = false;
-          }
-        } else if( PEDESTRIANS_GO == semaphoreCurrentState && whenPplFirstOpen_time + PPL_CROSS_TIME > millis() ) {
-          semaphoreDesiredState = PEDESTRIANS_GO;
-        } else {
+          if( timeCarOpen > (1-trafficWeight)*MIN_PPL_WAITTIME + trafficWeight*MAX_PPL_WAITTIME ) semaphoreDesiredState = PEDESTRIANS_GO;
+        } else if( timePplOpen > PPL_CROSS_TIME ) {
           semaphoreDesiredState = CARS_GO;
         }
 

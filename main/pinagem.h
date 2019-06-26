@@ -1,0 +1,13 @@
+
+#define LED_GREEN_PIN 45
+#define LED_YELLW_PIN 47
+#define LED_RED_1_PIN 48
+#define LED_RED_2_PIN 49
+#define LED_CAR_PIN 40
+#define LED_PPL_PIN 42
+
+#define CAR_FLOW_S_PIN A15
+#define CRSWLK_BTN_PIN 39
+#define TRNINC_SNS_PIN 37
+#define TRAIN_GATE_PIN 26
+#define EMGINC_SNS_PIN 52

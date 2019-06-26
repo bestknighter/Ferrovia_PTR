@@ -1,0 +1,6 @@
+
+#define MIN_PPL_WAITTIME 2000 // 2s
+#define MAX_PPL_WAITTIME 60000 // 60s
+#define PPL_CROSS_TIME 10000 // 10s
+#define TRN_GTE_OPEN_ANG 65
+#define TRN_GTE_CLSE_ANG 0
